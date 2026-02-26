@@ -1,0 +1,109 @@
+import { PrismaClient } from "@prisma/client";
+import { PrismaNeon } from "@prisma/adapter-neon";
+import { Pool } from "@neondatabase/serverless";
+import { z } from "zod";
+import Together from "together-ai";
+
+function optimizeMessagesForTokens(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+): { role: "system" | "user" | "assistant"; content: string }[] {
+  // Strip code blocks from assistant messages except the last 2 to save tokens
+  const assistantIndices: number[] = [];
+  for (
+    let i = messages.length - 1;
+    i >= 0 && assistantIndices.length < 2;
+    i--
+  ) {
+    if (messages[i].role === "assistant") {
+      assistantIndices.push(i);
+    }
+  }
+  return messages.map((msg, index) => {
+    if (msg.role === "assistant" && !assistantIndices.includes(index)) {
+      return {
+        ...msg,
+        content: msg.content.replace(/```[\s\S]*?```/g, "").trim(),
+      };
+    }
+    return msg;
+  });
+}
+
+export async function POST(req: Request) {
+  const neon = new Pool({ connectionString: process.env.DATABASE_URL });
+  const adapter = new PrismaNeon(neon);
+  const prisma = new PrismaClient({ adapter });
+  const { messageId, model: originalModel } = await req.json();
+
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+  });
+
+  if (!message) {
+    return new Response(null, { status: 404 });
+  }
+
+  const messagesRes = await prisma.message.findMany({
+    where: { chatId: message.chatId, position: { lte: message.position } },
+    orderBy: { position: "asc" },
+  });
+
+  let messages = z
+    .array(
+      z.object({
+        role: z.enum(["system", "user", "assistant"]),
+        content: z.string(),
+      }),
+    )
+    .parse(messagesRes);
+
+  messages = optimizeMessagesForTokens(messages);
+
+  if (messages.length > 10) {
+    messages = [messages[0], messages[1], messages[2], ...messages.slice(-7)];
+  }
+
+  let model = originalModel;
+  let apiKey = process.env.TOGETHER_API_KEY;
+  let baseURL = undefined;
+
+  if (originalModel.startsWith("groq/")) {
+    model = originalModel.replace("groq/", "");
+    apiKey = process.env.GROQ_API_KEY;
+    baseURL = "https://api.groq.com/openai/v1";
+  } else if (originalModel.startsWith("mistral/")) {
+    model = originalModel.replace("mistral/", "");
+    apiKey = process.env.MISTRAL_API_KEY;
+    baseURL = "https://api.mistral.ai/v1";
+  }
+
+  let options: ConstructorParameters<typeof Together>[0] = {
+    apiKey,
+    baseURL,
+  };
+
+  if (process.env.HELICONE_API_KEY && !baseURL) {
+    options.baseURL = "https://together.helicone.ai/v1";
+    options.defaultHeaders = {
+      "Helicone-Auth": `Bearer ${process.env.HELICONE_API_KEY}`,
+      "Helicone-Property-appname": "LlamaCoder",
+      "Helicone-Session-Id": message.chatId,
+      "Helicone-Session-Name": "LlamaCoder Chat",
+    };
+  }
+
+  const together = new Together(options);
+
+  const res = await together.chat.completions.create({
+    model,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    stream: true,
+    temperature: 0.4,
+    max_tokens: originalModel.startsWith("groq/") ? 8192 : 9000,
+  });
+
+  return new Response(res.toReadableStream());
+}
+
+export const runtime = "edge";
+export const maxDuration = 300;
