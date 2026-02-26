@@ -105,5 +105,5 @@ export async function POST(req: Request) {
   return new Response(res.toReadableStream());
 }
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const maxDuration = 300;
