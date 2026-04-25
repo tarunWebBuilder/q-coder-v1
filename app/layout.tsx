@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import PlausibleProvider from "next-plausible";
 import "./globals.css";
+import { AuthKitProvider } from '@workos-inc/authkit-nextjs/components';
 
-let title = "Llama Coder – AI Code Generator";
-let description = "Generate your next app with Llama 3.1 405B";
-let url = "https://llamacoder.io/";
+let title = "Parexa AI – AI Code Generator";
+let description = "Generate your next app with Parexa";
+let url = "https://www.parexa.xyz/";
 let ogimage = "https://llamacoder.io/og-image.png";
 let sitename = "llamacoder.io";
 
@@ -39,11 +40,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full">
-      <head>
-        <PlausibleProvider domain="llamacoder.io" />
-      </head>
+<body>
+        {/* <PlausibleProvider domain="https://www.parexa.xyz/" /> */}
 
-      {children}
+   <AuthKitProvider>
+  {children}
+   </AuthKitProvider>
+    
+  
+</body>
     </html>
   );
 }

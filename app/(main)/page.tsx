@@ -11,7 +11,6 @@ import * as Select from "@radix-ui/react-select";
 import assert from "assert";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   use,
@@ -20,19 +19,18 @@ import {
   useTransition,
   useEffect,
   useMemo,
-  memo,
 } from "react";
 
 import { Context } from "./providers";
-import Header from "@/components/header";
 import { useS3Upload } from "next-s3-upload";
 import UploadIcon from "@/components/icons/upload-icon";
 import { MODELS, SUGGESTED_PROMPTS } from "@/lib/constants";
+import Header from "@/components/header";
 
 export default function Home() {
   const { setStreamPromise } = use(Context);
   const router = useRouter();
-
+ 
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(
     MODELS.find((m) => !m.hidden)?.value || MODELS[0].value,
@@ -98,6 +96,7 @@ export default function Home() {
       </div>
 
       <div className="isolate flex h-full grow flex-col">
+        <Header  />
 
         <div className="mt-10 flex grow flex-col items-center px-4 lg:mt-16">
 
