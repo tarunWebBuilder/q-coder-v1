@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { Pool } from "@neondatabase/serverless";
 import { z } from "zod";
-import Together from "together-ai";
+import { createCompletionStream } from "@/lib/llm";
 
 function optimizeMessagesForTokens(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
@@ -63,46 +63,15 @@ export async function POST(req: Request) {
     messages = [messages[0], messages[1], messages[2], ...messages.slice(-7)];
   }
 
-  let model = originalModel;
-  let apiKey = process.env.TOGETHER_API_KEY;
-  let baseURL = undefined;
-
-  if (originalModel.startsWith("groq/")) {
-    model = originalModel.replace("groq/", "");
-    apiKey = process.env.GROQ_API_KEY;
-    baseURL = "https://api.groq.com/openai/v1";
-  } else if (originalModel.startsWith("mistral/")) {
-    model = originalModel.replace("mistral/", "");
-    apiKey = process.env.MISTRAL_API_KEY;
-    baseURL = "https://api.mistral.ai/v1";
-  }
-
-  let options: ConstructorParameters<typeof Together>[0] = {
-    apiKey,
-    baseURL,
-  };
-
-  if (process.env.HELICONE_API_KEY && !baseURL) {
-    options.baseURL = "https://together.helicone.ai/v1";
-    options.defaultHeaders = {
-      "Helicone-Auth": `Bearer ${process.env.HELICONE_API_KEY}`,
-      "Helicone-Property-appname": "LlamaCoder",
-      "Helicone-Session-Id": message.chatId,
-      "Helicone-Session-Name": "LlamaCoder Chat",
-    };
-  }
-
-  const together = new Together(options);
-
-  const res = await together.chat.completions.create({
-    model,
+  const stream = await createCompletionStream({
+    model: originalModel,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    stream: true,
     temperature: 0.4,
-    max_tokens: originalModel.startsWith("groq/") ? 8192 : 9000,
+    maxTokens: 9000,
+    chatId: message.chatId,
   });
 
-  return new Response(res.toReadableStream());
+  return new Response(stream);
 }
 
 export const runtime = "nodejs";

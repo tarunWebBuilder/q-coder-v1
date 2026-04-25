@@ -5,7 +5,7 @@ import {
   screenshotToCodePrompt,
   softwareArchitectPrompt,
 } from "@/lib/prompts";
-import Together from "together-ai";
+import { createTextCompletion, isMistralModel } from "@/lib/llm";
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,57 +22,22 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    let apiKey = process.env.TOGETHER_API_KEY;
-    let baseURL: string | undefined = undefined;
-    let modelId = model as string;
-
-    if (model.startsWith("groq/")) {
-      modelId = model.replace("groq/", "");
-      apiKey = process.env.GROQ_API_KEY;
-      baseURL = "https://api.groq.com/openai/v1";
-    } else if (model.startsWith("mistral/")) {
-      modelId = model.replace("mistral/", "");
-      apiKey = process.env.MISTRAL_API_KEY;
-      baseURL = "https://api.mistral.ai/v1";
-    }
-
-    if (!apiKey) {
-      console.error("Missing API key for provider", { model, baseURL });
-      return NextResponse.json(
-        { error: "Missing API key for selected model provider" },
-        { status: 500 },
-      );
-    }
-
-    let options: ConstructorParameters<typeof Together>[0] = {
-      apiKey,
-      baseURL,
-    };
-    if (process.env.HELICONE_API_KEY && !baseURL) {
-      options.baseURL = "https://together.helicone.ai/v1";
-      options.defaultHeaders = {
-        "Helicone-Auth": `Bearer ${process.env.HELICONE_API_KEY}`,
-        "Helicone-Property-appname": "LlamaCoder",
-        "Helicone-Session-Id": chat.id,
-        "Helicone-Session-Name": "LlamaCoder Chat",
-      };
-    }
-
-    const together = new Together(options);
-
-    const usingTogether = !baseURL;
+    const usingTogether = !model.startsWith("groq/") && !isMistralModel(model);
     const titleModel = usingTogether
       ? "Qwen/Qwen3-Next-80B-A3B-Instruct"
-      : modelId;
+      : model;
     const exampleModel = usingTogether
       ? "Qwen/Qwen3-Next-80B-A3B-Instruct"
-      : modelId;
-    const planModel = usingTogether ? "Qwen/Qwen3-Next-80B-A3B-Instruct" : modelId;
+      : model;
+    const planModel = usingTogether
+      ? "Qwen/Qwen3-Next-80B-A3B-Instruct"
+      : model;
     const imageModel = usingTogether ? "moonshotai/Kimi-K2.5" : undefined;
 
     async function fetchTitle() {
-      const responseForChatTitle = await together.chat.completions.create({
+      const title = await createTextCompletion({
         model: titleModel,
+        chatId: chat.id,
         messages: [
           {
             role: "system",
@@ -85,13 +50,14 @@ export async function POST(request: NextRequest) {
           },
         ],
       });
-      const title = responseForChatTitle.choices[0].message?.content || prompt;
-      return title;
+
+      return title || prompt;
     }
 
     async function fetchTopExample() {
-      const findSimilarExamples = await together.chat.completions.create({
+      const mostSimilarExample = await createTextCompletion({
         model: exampleModel,
+        chatId: chat.id,
         messages: [
           {
             role: "system",
@@ -110,9 +76,7 @@ export async function POST(request: NextRequest) {
         ],
       });
 
-      const mostSimilarExample =
-        findSimilarExamples.choices[0].message?.content || "none";
-      return mostSimilarExample;
+      return mostSimilarExample || "none";
     }
 
     const [title, mostSimilarExample] = await Promise.all([
@@ -122,10 +86,11 @@ export async function POST(request: NextRequest) {
 
     let fullScreenshotDescription;
     if (screenshotUrl && imageModel) {
-      const screenshotResponse = await together.chat.completions.create({
+      fullScreenshotDescription = await createTextCompletion({
         model: imageModel,
+        chatId: chat.id,
         temperature: 0.4,
-        max_tokens: 1000,
+        maxTokens: 1000,
         messages: [
           {
             role: "user",
@@ -141,16 +106,13 @@ export async function POST(request: NextRequest) {
           },
         ],
       });
-
-      fullScreenshotDescription =
-        screenshotResponse.choices[0].message?.content;
     }
 
     let userMessage: string;
     if (quality === "high") {
-      let initialRes = await together.chat.completions.create({
+      const initialPlan = await createTextCompletion({
         model: planModel,
-        // model: "moonshotai/Kimi-K2-Thinking",
+        chatId: chat.id,
         messages: [
           {
             role: "system",
@@ -164,12 +126,12 @@ export async function POST(request: NextRequest) {
           },
         ],
         temperature: 0.4,
-        max_tokens: 3000,
+        maxTokens: 3000,
       });
 
-      console.log("PLAN:", initialRes.choices[0].message?.content);
+      console.log("PLAN:", initialPlan);
 
-      userMessage = initialRes.choices[0].message?.content ?? prompt;
+      userMessage = initialPlan || prompt;
     } else if (fullScreenshotDescription) {
       userMessage =
         prompt +
@@ -179,7 +141,7 @@ export async function POST(request: NextRequest) {
       userMessage = prompt;
     }
 
-    let newChat = await prisma.chat.update({
+    const newChat = await prisma.chat.update({
       where: {
         id: chat.id,
       },
@@ -204,7 +166,10 @@ export async function POST(request: NextRequest) {
     });
 
     const lastMessage = newChat.messages
-      .sort((a: { position: number; }, b: { position: number; }) => a.position - b.position)
+      .sort(
+        (a: { position: number }, b: { position: number }) =>
+          a.position - b.position,
+      )
       .at(-1);
     if (!lastMessage) throw new Error("No new message");
 
